@@ -1,6 +1,7 @@
-import { Table, Tag, Button } from 'antd'
+import { Table, Tag, Button, Popconfirm } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import type { BacktestRun } from '../../api/client'
+import { backtestsApi } from '../../api/client'
 import { useNavigate } from 'react-router-dom'
 
 const STATUS_COLOR: Record<string, string> = {
@@ -20,9 +21,10 @@ const STATUS_LABEL: Record<string, string> = {
 interface Props {
   runs: BacktestRun[]
   loading?: boolean
+  onDeleted?: (id: string) => void
 }
 
-export function RunsTable({ runs, loading }: Props) {
+export function RunsTable({ runs, loading, onDeleted }: Props) {
   const navigate = useNavigate()
 
   const columns: ColumnsType<BacktestRun> = [
@@ -49,16 +51,31 @@ export function RunsTable({ runs, loading }: Props) {
     },
     {
       title: '操作',
-      width: 100,
+      width: 160,
       render: (_, record) => (
-        <Button
-          type="link"
-          size="small"
-          disabled={record.status !== 'completed'}
-          onClick={() => navigate(`/results/${record.id}`)}
-        >
-          查看结果
-        </Button>
+        <div style={{ display: 'flex', gap: 4 }}>
+          <Button
+            type="link"
+            size="small"
+            disabled={record.status !== 'completed'}
+            onClick={() => navigate(`/results/${record.id}`)}
+          >
+            查看结果
+          </Button>
+          <Popconfirm
+            title="确认删除这条回测记录？"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() =>
+              backtestsApi.delete(record.id).then(() => onDeleted?.(record.id))
+            }
+          >
+            <Button type="link" size="small" danger>
+              删除
+            </Button>
+          </Popconfirm>
+        </div>
       ),
     },
   ]

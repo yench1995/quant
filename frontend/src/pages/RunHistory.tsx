@@ -15,10 +15,14 @@ export function RunHistory() {
     backtestsApi.list().then(setRuns).catch(console.error).finally(() => setLoading(false))
   }, [])
 
+  const handleDeleted = (id: string) => {
+    setRuns(prev => prev.filter(r => r.id !== id))
+  }
+
   return (
     <div>
       <Title level={3}>历史回测记录</Title>
-      <RunsTable runs={runs} loading={loading} />
+      <RunsTable runs={runs} loading={loading} onDeleted={handleDeleted} />
     </div>
   )
 }

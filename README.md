@@ -32,17 +32,25 @@ quant/
 ```bash
 cd backend
 
-# 安装依赖（推荐用 uv，也可用 pip）
+# 创建并激活虚拟环境（避免与系统包冲突）
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS/Linux
+source .venv/bin/activate
+
+# 安装依赖
 pip install -e .
 
 # 复制环境变量配置
 cp .env.example .env
 
-# 启动开发服务器（默认端口 8000）
-uvicorn app.main:app --reload
+# 启动开发服务器（端口 8001）
+Get-Process python | Stop-Process -Force
+uvicorn app.main:app --port 8001
 ```
 
-API 文档访问：http://localhost:8000/docs
+API 文档访问：http://localhost:8001/docs
 
 ### 2. 前端
 
@@ -58,7 +66,7 @@ npm run dev
 
 前端访问：http://localhost:5173
 
-> 前端已配置代理，`/api` 请求自动转发到后端 `http://localhost:8000`，无需额外配置跨域。
+> 前端已配置代理，`/api` 请求自动转发到后端 `http://localhost:8001`，无需额外配置跨域。
 
 ### 3. 同时启动（推荐）
 

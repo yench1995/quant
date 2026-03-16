@@ -95,6 +95,7 @@ export const backtestsApi = {
     api.post<BacktestRun>('/backtests', req).then(r => r.data),
   list: () => api.get<BacktestRun[]>('/backtests').then(r => r.data),
   get: (id: string) => api.get<BacktestDetail>(`/backtests/${id}`).then(r => r.data),
+  delete: (id: string) => api.delete(`/backtests/${id}`),
 }
 
 export const resultsApi = {
