@@ -1,36 +1,31 @@
 import json
 from datetime import datetime, timedelta
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
-from ..models.cache import DataCache
+
+from ..database import fetch_one, execute
+
 
 class CacheManager:
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
     async def get(self, key: str) -> dict | list | None:
-        result = await self.session.execute(
-            select(DataCache).where(DataCache.key == key)
+        row = await fetch_one(
+            "SELECT payload, expires_at FROM data_cache WHERE key = ?", [key]
         )
-        row = result.scalar_one_or_none()
         if row is None:
             return None
-        if row.expires_at and row.expires_at < datetime.utcnow():
-            await self.session.delete(row)
-            await self.session.commit()
+        expires_at = row.get("expires_at")
+        if expires_at and expires_at < datetime.utcnow():
+            await execute("DELETE FROM data_cache WHERE key = ?", [key])
             return None
-        return json.loads(row.payload)
+        return json.loads(row["payload"])
 
-    async def set(self, key: str, value: dict | list, ttl_hours: int = 24 * 7):
+    async def set(self, key: str, value: dict | list, ttl_hours: int = 24 * 7) -> None:
         expires_at = datetime.utcnow() + timedelta(hours=ttl_hours)
-        existing = await self.session.execute(
-            select(DataCache).where(DataCache.key == key)
-        )
-        row = existing.scalar_one_or_none()
         payload = json.dumps(value, ensure_ascii=False, default=str)
-        if row:
-            row.payload = payload
-            row.expires_at = expires_at
-        else:
-            self.session.add(DataCache(key=key, payload=payload, expires_at=expires_at))
-        await self.session.commit()
+        await execute(
+            """
+            INSERT INTO data_cache (key, payload, expires_at) VALUES (?, ?, ?)
+            ON CONFLICT (key) DO UPDATE SET
+                payload    = EXCLUDED.payload,
+                expires_at = EXCLUDED.expires_at
+            """,
+            [key, payload, expires_at],
+        )

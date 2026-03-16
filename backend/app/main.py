@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from .config import settings
-from .database import create_tables
+from .database import init_db, close_db
+from .data.fetcher import baostock_login, baostock_logout
 from .strategies.registry import StrategyRegistry
 from .api.v1.strategies import router as strategies_router
 from .api.v1.backtests import router as backtests_router
@@ -14,11 +15,12 @@ from .api.v1.data_management import router as data_management_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create DB tables
-    await create_tables()
-    # Discover strategies
+    init_db(settings.DATABASE_PATH)
+    baostock_login()          # 建立持久连接，整个进程生命周期只登录一次
     StrategyRegistry.discover()
     yield
+    baostock_logout()         # 应用关闭时退出
+    close_db()
 
 
 app = FastAPI(

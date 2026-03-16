@@ -1,10 +1,7 @@
 import pandas as pd
-from fastapi import APIRouter, Depends, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from fastapi import APIRouter, Query
 from ...data.fetcher import AkShareFetcher
-from ...database import get_db
-from ...models.lhb import LHBDaily
+from ...database import fetch_all
 import asyncio
 
 router = APIRouter()
@@ -25,29 +22,26 @@ async def get_lhb_institutions(
     date: str = Query(..., description="日期 YYYY-MM-DD"),
     min_net_buy_wan: float = Query(0.0, description="机构净买入下限（万元），默认0即净买入>卖出"),
     only_down: bool = Query(False, description="仅显示当天股价下跌的个股"),
-    db: AsyncSession = Depends(get_db),
 ):
     """
     查询指定日期龙虎榜中机构净买入大于卖出的个股，按净买入金额降序排列。
     优先从本地 lhb_daily 表读取，无数据则回退到 AkShare。
     """
-    # Try local DB first
-    result = await db.execute(
-        select(LHBDaily).where(LHBDaily.date == date)
+    db_rows = await fetch_all(
+        "SELECT * FROM lhb_daily WHERE date = ?", [date]
     )
-    db_rows = result.scalars().all()
 
     if db_rows:
         df = pd.DataFrame([
             {
-                "symbol": r.symbol,
-                "name": r.name,
-                "buy_amount": r.buy_amount,
-                "sell_amount": r.sell_amount,
-                "net_buy": r.net_buy,
-                "buy_inst_count": r.buy_inst_count,
-                "sell_inst_count": r.sell_inst_count,
-                "change_pct": 0.0,
+                "symbol":          r["symbol"],
+                "name":            r["name"],
+                "buy_amount":      r["buy_amount"],
+                "sell_amount":     r["sell_amount"],
+                "net_buy":         r["net_buy"],
+                "buy_inst_count":  r["buy_inst_count"],
+                "sell_inst_count": r["sell_inst_count"],
+                "change_pct":      0.0,
             }
             for r in db_rows
         ])
@@ -58,16 +52,13 @@ async def get_lhb_institutions(
     if df is None or df.empty:
         return {"date": date, "total": 0, "data": []}
 
-    # Filter: net_buy > threshold
     min_yuan = min_net_buy_wan * 10000
     filtered = df[df["net_buy"] > min_yuan].copy()
 
-    # Filter: stock price down on that day
     if only_down and "change_pct" in filtered.columns:
         filtered["change_pct"] = pd.to_numeric(filtered["change_pct"], errors="coerce")
         filtered = filtered[filtered["change_pct"] < 0]
 
-    # Deduplicate same stock (multiple listing reasons)
     filtered = (
         filtered.sort_values("net_buy", ascending=False)
         .drop_duplicates(subset=["symbol"])
@@ -77,14 +68,14 @@ async def get_lhb_institutions(
     records = []
     for _, row in filtered.iterrows():
         records.append({
-            "symbol": str(row.get("symbol", "")),
-            "name": str(row.get("name", "")),
-            "change_pct": round(float(row.get("change_pct", 0)), 2),
-            "buy_amount_wan": round(float(row.get("buy_amount", 0)) / 10000, 2),
-            "sell_amount_wan": round(float(row.get("sell_amount", 0)) / 10000, 2),
-            "net_buy_wan": round(float(row.get("net_buy", 0)) / 10000, 2),
-            "buy_inst_count": int(row.get("buy_inst_count", 0)),
-            "sell_inst_count": int(row.get("sell_inst_count", 0)),
+            "symbol":           str(row.get("symbol", "")),
+            "name":             str(row.get("name", "")),
+            "change_pct":       round(float(row.get("change_pct", 0)), 2),
+            "buy_amount_wan":   round(float(row.get("buy_amount", 0)) / 10000, 2),
+            "sell_amount_wan":  round(float(row.get("sell_amount", 0)) / 10000, 2),
+            "net_buy_wan":      round(float(row.get("net_buy", 0)) / 10000, 2),
+            "buy_inst_count":   int(row.get("buy_inst_count", 0)),
+            "sell_inst_count":  int(row.get("sell_inst_count", 0)),
         })
 
     return {"date": date, "total": len(records), "data": records}

@@ -1,0 +1,4 @@
+WARNING: Retrying (Retry(total=4, connect=None, read=None, redirect=None, status=None)) after connection broken by 'ProxyError('Cannot connect to proxy.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))': /simple/duckdb/
+
+[notice] A new release of pip is available: 23.2.1 -> 26.0.1
+[notice] To update, run: E:\code\finance\quant\backend\.venv\Scripts\python.exe -m pip install --upgrade pip

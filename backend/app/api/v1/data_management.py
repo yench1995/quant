@@ -1,13 +1,11 @@
 import asyncio
+import random
 from datetime import datetime, timedelta
 from typing import Any
 from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel
-from sqlalchemy import select, func, text
 
-from ...database import AsyncSessionLocal
-from ...models.lhb import LHBDaily
-from ...models.price import StockPriceDaily
+from ...database import fetch_all, fetch_one, executemany
 from ...data.fetcher import AkShareFetcher
 
 router = APIRouter()
@@ -35,22 +33,16 @@ def _default_dates() -> tuple[str, str]:
 
 
 def _month_ranges(start_date: str, end_date: str) -> list[tuple[str, str]]:
-    """Split a date range into monthly chunks."""
+    """Split a date range into quarterly chunks to reduce API call count."""
     start = datetime.strptime(start_date, "%Y-%m-%d")
     end = datetime.strptime(end_date, "%Y-%m-%d")
-    months = []
-    cur = start.replace(day=1)
+    chunks = []
+    cur = start
     while cur <= end:
-        month_start = cur
-        # last day of month
-        next_month = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
-        month_end = next_month - timedelta(days=1)
-        # clamp to requested range
-        actual_start = max(month_start, start)
-        actual_end = min(month_end, end)
-        months.append((actual_start.strftime("%Y-%m-%d"), actual_end.strftime("%Y-%m-%d")))
-        cur = next_month
-    return months
+        chunk_end = min(cur + timedelta(days=90), end)
+        chunks.append((cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+        cur = chunk_end + timedelta(days=1)
+    return chunks
 
 
 async def _run_seed(start_date: str, end_date: str):
@@ -59,59 +51,77 @@ async def _run_seed(start_date: str, end_date: str):
     _seed_status["error"] = None
 
     try:
+        loop = asyncio.get_event_loop()
+
         # ── Phase 1: LHB data ──────────────────────────────────────────────
         _seed_status["phase"] = "lhb"
         _seed_status["lhb"]["status"] = "running"
         months = _month_ranges(start_date, end_date)
+
+        # 预查已有数据的季度块，跳过已存在的
+        existing_lhb = await fetch_all(
+            "SELECT DISTINCT date FROM lhb_daily WHERE date >= ? AND date <= ?",
+            [start_date, end_date],
+        )
+        existing_lhb_dates = {r["date"] for r in existing_lhb}
+
+        # 标记哪些块需要跳过（该季度已有任意记录视为已完成）
+        chunks_needed = []
+        for ms, me in months:
+            has_data = any(ms <= d <= me for d in existing_lhb_dates)
+            chunks_needed.append((ms, me, not has_data))
+
+        need_count = sum(1 for _, _, needed in chunks_needed if needed)
+        skip_count = len(months) - need_count
+        print(f"[seed] LHB: {len(months)} 块，已有 {skip_count} 块跳过，需抓取 {need_count} 块")
+
         _seed_status["lhb"]["total_months"] = len(months)
-        _seed_status["lhb"]["months_done"] = 0
+        _seed_status["lhb"]["months_done"] = skip_count  # 已跳过的直接计入进度
 
-        loop = asyncio.get_event_loop()
+        for i, (ms, me, needed) in enumerate(chunks_needed):
+            if not needed:
+                continue  # 已有数据，跳过
 
-        for i, (ms, me) in enumerate(months):
-            df = await loop.run_in_executor(None, lambda s=ms, e=me: fetcher.get_lhb_raw(s, e))
+            try:
+                df = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda s=ms, e=me: fetcher.get_lhb_raw(s, e)),
+                    timeout=35,
+                )
+            except asyncio.TimeoutError:
+                print(f"[seed] LHB timeout for {ms}~{me}, skipping")
+                _seed_status["lhb"]["months_done"] += 1
+                await asyncio.sleep(2)
+                continue
+
             if df is not None and not df.empty:
-                # normalize date column
                 date_col = "date" if "date" in df.columns else df.columns[-1]
-                records = []
-                for _, row in df.iterrows():
-                    records.append(
-                        LHBDaily(
-                            date=str(row.get(date_col, ""))[:10],
-                            symbol=str(row.get("symbol", "")),
-                            name=str(row.get("name", "")),
-                            buy_amount=float(row.get("buy_amount", 0) or 0),
-                            sell_amount=float(row.get("sell_amount", 0) or 0),
-                            net_buy=float(row.get("net_buy", 0) or 0),
-                            buy_inst_count=int(row.get("buy_inst_count", 0) or 0),
-                            sell_inst_count=int(row.get("sell_inst_count", 0) or 0),
-                        )
+                rows = [
+                    [
+                        str(row.get(date_col, ""))[:10],
+                        str(row.get("symbol", "")),
+                        str(row.get("name", "")),
+                        float(row.get("buy_amount", 0) or 0),
+                        float(row.get("sell_amount", 0) or 0),
+                        float(row.get("net_buy", 0) or 0),
+                        int(row.get("buy_inst_count", 0) or 0),
+                        int(row.get("sell_inst_count", 0) or 0),
+                    ]
+                    for _, row in df.iterrows()
+                ]
+                if rows:
+                    await executemany(
+                        """
+                        INSERT INTO lhb_daily
+                            (date, symbol, name, buy_amount, sell_amount, net_buy,
+                             buy_inst_count, sell_inst_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        rows,
                     )
-                if records:
-                    async with AsyncSessionLocal() as session:
-                        for rec in records:
-                            await session.execute(
-                                text(
-                                    "INSERT OR IGNORE INTO lhb_daily "
-                                    "(date, symbol, name, buy_amount, sell_amount, net_buy, "
-                                    "buy_inst_count, sell_inst_count) "
-                                    "VALUES (:date, :symbol, :name, :buy_amount, :sell_amount, "
-                                    ":net_buy, :buy_inst_count, :sell_inst_count)"
-                                ),
-                                {
-                                    "date": rec.date,
-                                    "symbol": rec.symbol,
-                                    "name": rec.name,
-                                    "buy_amount": rec.buy_amount,
-                                    "sell_amount": rec.sell_amount,
-                                    "net_buy": rec.net_buy,
-                                    "buy_inst_count": rec.buy_inst_count,
-                                    "sell_inst_count": rec.sell_inst_count,
-                                },
-                            )
-                        await session.commit()
 
-            _seed_status["lhb"]["months_done"] = i + 1
+            _seed_status["lhb"]["months_done"] += 1
+            await asyncio.sleep(1.5 + random.uniform(0, 1))
 
         _seed_status["lhb"]["status"] = "done"
 
@@ -119,52 +129,63 @@ async def _run_seed(start_date: str, end_date: str):
         _seed_status["phase"] = "price"
         _seed_status["price"]["status"] = "running"
 
-        # Collect unique symbols from lhb_daily
-        async with AsyncSessionLocal() as session:
-            result = await session.execute(
-                select(LHBDaily.symbol).distinct()
-            )
-            symbols = [row[0] for row in result.fetchall()]
+        # 所有 LHB 出现过的股票
+        all_symbol_rows = await fetch_all("SELECT DISTINCT symbol FROM lhb_daily")
+        all_symbols = [r["symbol"] for r in all_symbol_rows]
 
-        _seed_status["price"]["total_symbols"] = len(symbols)
-        _seed_status["price"]["symbols_done"] = 0
+        # 查哪些 symbol 在请求的日期范围内已有价格数据（有数据则跳过）
+        end_check = end_date  # 检查是否覆盖到 end_date 附近
+        covered_rows = await fetch_all(
+            "SELECT DISTINCT symbol FROM stock_price_daily WHERE date >= ? AND date <= ?",
+            [start_date, end_check],
+        )
+        covered_symbols = {r["symbol"] for r in covered_rows}
+        symbols_to_fetch = [s for s in all_symbols if s not in covered_symbols]
 
-        CONCURRENCY = 5
+        print(
+            f"[seed] Price: 共 {len(all_symbols)} 个股票，"
+            f"已有 {len(covered_symbols)} 个跳过，需抓取 {len(symbols_to_fetch)} 个"
+        )
+
+        _seed_status["price"]["total_symbols"] = len(all_symbols)
+        _seed_status["price"]["symbols_done"] = len(covered_symbols)  # 已跳过的计入进度
+
+        CONCURRENCY = 3
         sem = asyncio.Semaphore(CONCURRENCY)
-        done_count = 0
 
         async def fetch_and_store(symbol: str):
-            nonlocal done_count
             async with sem:
                 df = await loop.run_in_executor(
                     None,
                     lambda s=symbol: fetcher.get_price_history(s, start_date, end_date),
                 )
                 if df is not None and not df.empty:
-                    async with AsyncSessionLocal() as session:
-                        for _, row in df.iterrows():
-                            await session.execute(
-                                text(
-                                    "INSERT OR IGNORE INTO stock_price_daily "
-                                    "(date, symbol, open, close, high, low, volume, change_pct) "
-                                    "VALUES (:date, :symbol, :open, :close, :high, :low, :volume, :change_pct)"
-                                ),
-                                {
-                                    "date": str(row.get("date", ""))[:10],
-                                    "symbol": symbol,
-                                    "open": float(row.get("open", 0) or 0),
-                                    "close": float(row.get("close", 0) or 0),
-                                    "high": float(row.get("high", 0) or 0),
-                                    "low": float(row.get("low", 0) or 0),
-                                    "volume": float(row.get("volume", 0) or 0),
-                                    "change_pct": float(row.get("change_pct", 0) or 0),
-                                },
-                            )
-                        await session.commit()
-                done_count += 1
-                _seed_status["price"]["symbols_done"] = done_count
+                    rows = [
+                        [
+                            str(row.get("date", ""))[:10],
+                            symbol,
+                            float(row.get("open", 0) or 0),
+                            float(row.get("close", 0) or 0),
+                            float(row.get("high", 0) or 0),
+                            float(row.get("low", 0) or 0),
+                            float(row.get("volume", 0) or 0),
+                            float(row.get("change_pct", 0) or 0),
+                        ]
+                        for _, row in df.iterrows()
+                    ]
+                    if rows:
+                        await executemany(
+                            """
+                            INSERT INTO stock_price_daily
+                                (date, symbol, open, close, high, low, volume, change_pct)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            rows,
+                        )
+                _seed_status["price"]["symbols_done"] += 1
 
-        await asyncio.gather(*[fetch_and_store(s) for s in symbols])
+        await asyncio.gather(*[fetch_and_store(s) for s in symbols_to_fetch])
         _seed_status["price"]["status"] = "done"
         _seed_status["phase"] = "done"
 
@@ -185,7 +206,6 @@ async def seed_all(req: SeedRequest, background_tasks: BackgroundTasks):
     start_date = req.start_date or _default_dates()[0]
     end_date = req.end_date or _default_dates()[1]
 
-    # Reset status
     months = _month_ranges(start_date, end_date)
     _seed_status = {
         "running": True,
@@ -206,34 +226,33 @@ async def get_seed_status():
 
 @router.get("/data/coverage")
 async def get_coverage():
-    async with AsyncSessionLocal() as session:
-        # LHB stats
-        lhb_count = await session.scalar(select(func.count()).select_from(LHBDaily))
-        lhb_dates = await session.scalar(
-            select(func.count(LHBDaily.date.distinct()))
-        )
-        lhb_earliest = await session.scalar(select(func.min(LHBDaily.date)))
-        lhb_latest = await session.scalar(select(func.max(LHBDaily.date)))
-
-        # Price stats
-        price_count = await session.scalar(select(func.count()).select_from(StockPriceDaily))
-        price_symbols = await session.scalar(
-            select(func.count(StockPriceDaily.symbol.distinct()))
-        )
-        price_earliest = await session.scalar(select(func.min(StockPriceDaily.date)))
-        price_latest = await session.scalar(select(func.max(StockPriceDaily.date)))
-
+    lhb = await fetch_one("""
+        SELECT
+            COUNT(*)          AS total_records,
+            COUNT(DISTINCT date)   AS total_dates,
+            MIN(date)         AS earliest,
+            MAX(date)         AS latest
+        FROM lhb_daily
+    """)
+    price = await fetch_one("""
+        SELECT
+            COUNT(*)            AS total_records,
+            COUNT(DISTINCT symbol) AS total_symbols,
+            MIN(date)           AS earliest,
+            MAX(date)           AS latest
+        FROM stock_price_daily
+    """)
     return {
         "lhb": {
-            "total_dates": lhb_dates or 0,
-            "earliest": lhb_earliest or "",
-            "latest": lhb_latest or "",
-            "total_records": lhb_count or 0,
+            "total_dates":   lhb["total_dates"]   or 0,
+            "earliest":      lhb["earliest"]      or "",
+            "latest":        lhb["latest"]        or "",
+            "total_records": lhb["total_records"] or 0,
         },
         "price": {
-            "total_symbols": price_symbols or 0,
-            "total_records": price_count or 0,
-            "earliest": price_earliest or "",
-            "latest": price_latest or "",
+            "total_symbols": price["total_symbols"] or 0,
+            "total_records": price["total_records"] or 0,
+            "earliest":      price["earliest"]      or "",
+            "latest":        price["latest"]        or "",
         },
     }
