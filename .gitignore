@@ -8,7 +8,7 @@ venv/
 
 # Database (runtime data, not source)
 backend/data/finance.db
-data/
+/data/
 
 # IDE
 .idea/
