@@ -1,7 +1,6 @@
 import pandas as pd
 from fastapi import APIRouter, Query
 from ...data.fetcher import AkShareFetcher
-from ...database import fetch_all
 import asyncio
 
 router = APIRouter()
@@ -23,31 +22,9 @@ async def get_lhb_institutions(
     min_net_buy_wan: float = Query(0.0, description="机构净买入下限（万元），默认0即净买入>卖出"),
     only_down: bool = Query(False, description="仅显示当天股价下跌的个股"),
 ):
-    """
-    查询指定日期龙虎榜中机构净买入大于卖出的个股，按净买入金额降序排列。
-    优先从本地 lhb_daily 表读取，无数据则回退到 AkShare。
-    """
-    db_rows = await fetch_all(
-        "SELECT * FROM lhb_daily WHERE date = ?", [date]
-    )
-
-    if db_rows:
-        df = pd.DataFrame([
-            {
-                "symbol":          r["symbol"],
-                "name":            r["name"],
-                "buy_amount":      r["buy_amount"],
-                "sell_amount":     r["sell_amount"],
-                "net_buy":         r["net_buy"],
-                "buy_inst_count":  r["buy_inst_count"],
-                "sell_inst_count": r["sell_inst_count"],
-                "change_pct":      0.0,
-            }
-            for r in db_rows
-        ])
-    else:
-        loop = asyncio.get_event_loop()
-        df = await loop.run_in_executor(None, lambda: fetcher.get_lhb_data(date))
+    """查询指定日期龙虎榜中机构净买入大于卖出的个股，按净买入金额降序排列。"""
+    loop = asyncio.get_event_loop()
+    df = await loop.run_in_executor(None, lambda: fetcher.get_lhb_data(date))
 
     if df is None or df.empty:
         return {"date": date, "total": 0, "data": []}
