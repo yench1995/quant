@@ -26,6 +26,10 @@ class StrategyContext:
     trading_days: list[str]  # all trading days in range
     parameters: dict[str, Any]
     fetcher: Any  # AkShareFetcher
+    # symbol → price DataFrame (date, open, close, high, low, volume, change_pct)
+    # Pre-populated for strategies that need historical price (e.g. MA-based).
+    # LHB strategies can ignore this field.
+    price_cache: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 class AbstractStrategy(ABC):
     STRATEGY_ID: ClassVar[str]

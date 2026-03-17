@@ -24,11 +24,19 @@ def _get_lock() -> asyncio.Lock:
 
 
 def init_db(path: str) -> None:
-    """Open (or create) the DuckDB file and create all tables."""
+    """Open (or create) the DuckDB database and create all tables.
+
+    Supports both local file paths and MotherDuck cloud connections:
+      - Local:       init_db("../data/finance.duckdb")
+      - MotherDuck:  init_db("md:finance")  (requires MOTHERDUCK_TOKEN env var)
+    """
     global _conn
-    db_path = Path(path).resolve()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    _conn = duckdb.connect(str(db_path))
+    if path.startswith("md:"):
+        _conn = duckdb.connect(path)
+    else:
+        db_path = Path(path).resolve()
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        _conn = duckdb.connect(str(db_path))
     _create_tables(_conn)
 
 
@@ -123,6 +131,21 @@ def _create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             return_pct      DOUBLE  DEFAULT 0.0,
             holding_days    INTEGER DEFAULT 0,
             signal_net_buy  DOUBLE  DEFAULT 0.0
+        )
+        """,
+        # ── Technical indicators ──────────────────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS stock_indicator_daily (
+            date        VARCHAR NOT NULL,
+            symbol      VARCHAR NOT NULL,
+            ma5         DOUBLE,
+            ma10        DOUBLE,
+            ma20        DOUBLE,
+            ma60        DOUBLE,
+            macd        DOUBLE,
+            macd_signal DOUBLE,
+            rsi14       DOUBLE,
+            PRIMARY KEY (date, symbol)
         )
         """,
         # ── Cache ─────────────────────────────────────────────────────────────

@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     PRICE_SOURCE: str = "auto"
     # Tushare Pro token（PRICE_SOURCE=tushare 或 auto 时需要填写）
     TUSHARE_TOKEN: str = ""
+    # MotherDuck cloud token（DATABASE_PATH=md:finance 时需要填写）
+    # 获取方式: https://app.motherduck.com → Settings → Access Tokens
+    MOTHERDUCK_TOKEN: str = ""
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod

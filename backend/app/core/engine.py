@@ -78,12 +78,19 @@ class BacktestEngine:
         lhb_df_all = await self._get_lhb_data(run["start_date"], run["end_date"], trading_days)
 
         lhb_by_date: dict[str, pd.DataFrame] = {}
+        lhb_symbols: list[str] = []
         if lhb_df_all is not None and not lhb_df_all.empty:
             date_col = "date" if "date" in lhb_df_all.columns else lhb_df_all.columns[-1]
             for d, grp in lhb_df_all.groupby(date_col):
                 lhb_by_date[str(d)] = grp.reset_index(drop=True)
+            lhb_symbols = list(lhb_df_all["symbol"].unique())
 
-        # ── Step 2: Generate signals ──────────────────────────────────────
+        # ── Step 2: Pre-fetch price data for all LHB symbols ─────────────
+        # Fetched before signal generation so MA-based strategies can access
+        # historical prices via StrategyContext.price_cache.
+        price_cache = await self._get_price_data(lhb_symbols, run["start_date"], run["end_date"])
+
+        # ── Step 3: Generate signals ──────────────────────────────────────
         all_signals = []
 
         class _PrefetchedFetcher:
@@ -98,6 +105,7 @@ class BacktestEngine:
                 trading_days=trading_days,
                 parameters=params,
                 fetcher=prefetched,
+                price_cache=price_cache,
             )
             signals = strategy.generate_signals(ctx)
             for sig in signals:
@@ -109,9 +117,14 @@ class BacktestEngine:
                     continue
                 all_signals.append((trade_date, entry_date, exit_date, sig))
 
-        # ── Step 3: Price data ────────────────────────────────────────────
-        symbols = list({sig.symbol for _, _, _, sig in all_signals})
-        price_cache = await self._get_price_data(symbols, run["start_date"], run["end_date"])
+        # Ensure any signal symbols not already in price_cache are fetched
+        missing_symbols = [
+            sig.symbol for _, _, _, sig in all_signals
+            if sig.symbol not in price_cache or price_cache[sig.symbol] is None
+        ]
+        if missing_symbols:
+            extra = await self._get_price_data(missing_symbols, run["start_date"], run["end_date"])
+            price_cache.update(extra)
 
         # Execute trades
         trades_data = []

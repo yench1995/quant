@@ -15,6 +15,10 @@ from .api.v1.data_management import router as data_management_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # MotherDuck requires the token in an env var before duckdb.connect() is called
+    if settings.MOTHERDUCK_TOKEN:
+        import os
+        os.environ.setdefault("motherduck_token", settings.MOTHERDUCK_TOKEN)
     init_db(settings.DATABASE_PATH)
     baostock_login()          # 建立持久连接，整个进程生命周期只登录一次
     StrategyRegistry.discover()
