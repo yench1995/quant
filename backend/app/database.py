@@ -157,6 +157,91 @@ def _create_tables(conn: duckdb.DuckDBPyConnection) -> None:
             expires_at TIMESTAMP
         )
         """,
+        # ── Extended fundamental / flow data ──────────────────────────────────
+        """
+        CREATE TABLE IF NOT EXISTS stock_basic (
+            symbol       VARCHAR PRIMARY KEY,
+            name         VARCHAR DEFAULT '',
+            exchange     VARCHAR DEFAULT '',
+            industry     VARCHAR DEFAULT '',
+            listing_date VARCHAR DEFAULT '',
+            is_active    BOOLEAN DEFAULT TRUE,
+            updated_at   TIMESTAMP DEFAULT now()
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS stock_suspend (
+            symbol       VARCHAR NOT NULL,
+            suspend_date VARCHAR NOT NULL,
+            resume_date  VARCHAR DEFAULT '',
+            reason       VARCHAR DEFAULT '',
+            PRIMARY KEY (symbol, suspend_date)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS stock_st_daily (
+            date    VARCHAR NOT NULL,
+            symbol  VARCHAR NOT NULL,
+            st_type VARCHAR DEFAULT 'normal',
+            PRIMARY KEY (date, symbol)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS northbound_flow_daily (
+            date        VARCHAR NOT NULL,
+            market      VARCHAR NOT NULL,
+            net_buy     DOUBLE DEFAULT 0.0,
+            buy_amount  DOUBLE DEFAULT 0.0,
+            sell_amount DOUBLE DEFAULT 0.0,
+            PRIMARY KEY (date, market)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS stock_money_flow_daily (
+            date                  VARCHAR NOT NULL,
+            symbol                VARCHAR NOT NULL,
+            main_net_inflow       DOUBLE DEFAULT 0.0,
+            main_net_inflow_pct   DOUBLE DEFAULT 0.0,
+            super_large_net       DOUBLE DEFAULT 0.0,
+            large_net             DOUBLE DEFAULT 0.0,
+            medium_net            DOUBLE DEFAULT 0.0,
+            small_net             DOUBLE DEFAULT 0.0,
+            PRIMARY KEY (date, symbol)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS stock_valuation_daily (
+            date     VARCHAR NOT NULL,
+            symbol   VARCHAR NOT NULL,
+            pe_ttm   DOUBLE,
+            pb       DOUBLE,
+            ps_ttm   DOUBLE,
+            total_mv DOUBLE,
+            circ_mv  DOUBLE,
+            PRIMARY KEY (date, symbol)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS index_constituent (
+            index_code VARCHAR NOT NULL,
+            symbol     VARCHAR NOT NULL,
+            in_date    VARCHAR DEFAULT 'current',
+            out_date   VARCHAR,
+            PRIMARY KEY (index_code, symbol, in_date)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS seed_job (
+            phase       VARCHAR PRIMARY KEY,
+            status      VARCHAR DEFAULT 'pending',
+            total_items INTEGER DEFAULT 0,
+            done_items  INTEGER DEFAULT 0,
+            last_symbol VARCHAR DEFAULT '',
+            started_at  TIMESTAMP,
+            updated_at  TIMESTAMP DEFAULT now(),
+            error_msg   VARCHAR DEFAULT ''
+        )
+        """,
     ]
     for stmt in stmts:
         conn.execute(stmt)
