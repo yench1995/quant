@@ -11,6 +11,7 @@ from .api.v1.backtests import router as backtests_router
 from .api.v1.market_data import router as market_data_router
 from .api.v1.results import router as results_router
 from .api.v1.data_management import router as data_management_router
+from .api.v1.seed_full import router as seed_full_router
 
 
 @asynccontextmanager
@@ -48,6 +49,7 @@ app.include_router(backtests_router, prefix=API_PREFIX, tags=["backtests"])
 app.include_router(market_data_router, prefix=API_PREFIX, tags=["market-data"])
 app.include_router(results_router, prefix=API_PREFIX, tags=["results"])
 app.include_router(data_management_router, prefix=API_PREFIX, tags=["data-management"])
+app.include_router(seed_full_router, prefix=f"{API_PREFIX}/seed-full", tags=["seed-full"])
 
 
 @app.get("/")
